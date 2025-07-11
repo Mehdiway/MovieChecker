@@ -134,6 +134,8 @@ class IMDBParentsGuideChecker {
             
             // Look for Sex & Nudity section
             let sexNudityRating = null;
+            let sexNudityContent = '';
+            let mildReasons = [];
             
             // Try different selectors for Sex & Nudity section
             const sections = $('.ipc-page-section');
@@ -154,6 +156,21 @@ class IMDBParentsGuideChecker {
                             sexNudityRating = 'None';
                         }
                     }
+                    
+                    // Extract content details for "Mild" analysis
+                    const contentItems = section.find('.ipc-html-content-inner-div, .advisory-content, li');
+                    contentItems.each((index, element) => {
+                        const text = $(element).text().trim();
+                        if (text && text.length > 10) { // Filter out short/empty text
+                            sexNudityContent += text + ' ';
+                        }
+                    });
+                    
+                    // If no content items found, get all text from section
+                    if (!sexNudityContent.trim()) {
+                        sexNudityContent = section.text().replace(/\s+/g, ' ').trim();
+                    }
+                    
                     break;
                 }
             }
@@ -166,12 +183,25 @@ class IMDBParentsGuideChecker {
                     if (severity) {
                         sexNudityRating = severity;
                     }
+                    
+                    // Get content from old format
+                    const oldContent = oldFormatSection.find('.advisory-content').text().trim();
+                    if (oldContent) {
+                        sexNudityContent = oldContent;
+                    }
                 }
+            }
+            
+            // Analyze content for "Mild" reasons if rating is "Mild"
+            if (sexNudityRating && sexNudityRating.toLowerCase().includes('mild')) {
+                mildReasons = this.analyzeMildContent(sexNudityContent);
             }
             
             return {
                 parentsGuideURL,
-                sexNudityRating: sexNudityRating || 'Unknown'
+                sexNudityRating: sexNudityRating || 'Unknown',
+                sexNudityContent: sexNudityContent,
+                mildReasons: mildReasons
             };
             
         } catch (error) {
@@ -180,9 +210,51 @@ class IMDBParentsGuideChecker {
         }
     }
 
+    analyzeMildContent(content) {
+        const reasons = [];
+        const lowerContent = content.toLowerCase();
+        
+        // Common mild content indicators
+        const mildIndicators = [
+            { keyword: ['kissing', 'kiss', 'kisses'], reason: 'Contains kissing scenes' },
+            { keyword: ['brief nudity', 'briefly nude', 'brief partial nudity'], reason: 'Brief nudity shown' },
+            { keyword: ['shirtless', 'bare chest', 'topless male'], reason: 'Male characters shown shirtless' },
+            { keyword: ['cleavage', 'low cut'], reason: 'Some cleavage visible' },
+            { keyword: ['suggestive', 'innuendo', 'sexual innuendo'], reason: 'Sexual innuendo or suggestive content' },
+            { keyword: ['romantic', 'romance', 'love scene'], reason: 'Romantic scenes' },
+            { keyword: ['flirting', 'flirt'], reason: 'Flirtatious behavior' },
+            { keyword: ['revealing clothing', 'skimpy', 'tight clothing'], reason: 'Revealing or tight clothing' },
+            { keyword: ['buttocks', 'rear end', 'bottom'], reason: 'Brief glimpse of buttocks' },
+            { keyword: ['underwear', 'bra', 'panties'], reason: 'Characters shown in underwear' },
+            { keyword: ['statue', 'painting', 'artwork'], reason: 'Artistic nudity (statues/paintings)' },
+            { keyword: ['medical', 'hospital', 'doctor'], reason: 'Medical/clinical context' },
+            { keyword: ['bathing', 'shower', 'bath'], reason: 'Bathing scenes (non-explicit)' },
+            { keyword: ['dancing', 'seductive dance'], reason: 'Suggestive dancing' },
+            { keyword: ['magazine', 'poster', 'picture'], reason: 'Suggestive images/posters in background' }
+        ];
+        
+        for (const indicator of mildIndicators) {
+            for (const keyword of indicator.keyword) {
+                if (lowerContent.includes(keyword)) {
+                    if (!reasons.includes(indicator.reason)) {
+                        reasons.push(indicator.reason);
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // If no specific reasons found but content exists, provide generic reason
+        if (reasons.length === 0 && content.trim()) {
+            reasons.push('Content deemed mild by IMDB reviewers');
+        }
+        
+        return reasons;
+    }
+
     async checkMultipleMovies(movieList) {
         console.log(`\n🎬 Checking ${movieList.length} movies/TV shows...`);
-        console.log('='.repeat(60));
+        console.log('=' * 60);
         
         const results = [];
         
@@ -224,35 +296,63 @@ class IMDBParentsGuideChecker {
         console.log('📊 BATCH RESULTS SUMMARY');
         console.log('='.repeat(80));
         
-        const noneRated = results.filter(r => r.isNone);
-        const nonNoneRated = results.filter(r => !r.isNone && !r.error);
+        const noneRated = results.filter(r => r.category === 'None');
+        const mildRated = results.filter(r => r.category === 'Mild');
+        const otherRated = results.filter(r => r.category === 'Other' && !r.error);
         const errors = results.filter(r => r.error);
         
+        // None Category
         console.log(`\n✅ Movies/Shows with "None" Sex & Nudity rating: ${noneRated.length}`);
         if (noneRated.length > 0) {
-            noneRated.forEach(movie => {
-                console.log(`  • ${movie.title} (${movie.year})`);
-                console.log(`    📋 Parents Guide: ${movie.parentsGuideURL}`);
+            noneRated.forEach((movie, index) => {
+                console.log(`  ${index + 1}. ${movie.title} (${movie.year})`);
+                console.log(`     📋 Parents Guide: ${movie.parentsGuideURL}`);
             });
         }
         
-        console.log(`\n❌ Movies/Shows with other ratings: ${nonNoneRated.length}`);
-        if (nonNoneRated.length > 0) {
-            nonNoneRated.forEach(movie => {
-                console.log(`  • ${movie.title} (${movie.year}) - Rating: ${movie.sexNudityRating}`);
-                console.log(`    📋 Parents Guide: ${movie.parentsGuideURL}`);
+        // Mild Category
+        console.log(`\n⚠️  Movies/Shows with "Mild" Sex & Nudity rating: ${mildRated.length}`);
+        if (mildRated.length > 0) {
+            mildRated.forEach((movie, index) => {
+                console.log(`  ${index + 1}. ${movie.title} (${movie.year})`);
+                console.log(`     📋 Parents Guide: ${movie.parentsGuideURL}`);
+                if (movie.mildReasons && movie.mildReasons.length > 0) {
+                    console.log(`     📝 Mild Content Reasons:`);
+                    movie.mildReasons.forEach((reason, reasonIndex) => {
+                        console.log(`        • ${reason}`);
+                    });
+                }
+                console.log(''); // Extra spacing between mild entries
             });
         }
         
+        // Other Category
+        console.log(`\n❌ Movies/Shows with other ratings: ${otherRated.length}`);
+        if (otherRated.length > 0) {
+            otherRated.forEach((movie, index) => {
+                console.log(`  ${index + 1}. ${movie.title} (${movie.year}) - Rating: ${movie.sexNudityRating}`);
+                console.log(`     📋 Parents Guide: ${movie.parentsGuideURL}`);
+            });
+        }
+        
+        // Errors
         console.log(`\n⚠️  Errors/Not found: ${errors.length}`);
         if (errors.length > 0) {
-            errors.forEach(movie => {
-                console.log(`  • ${movie.title} - ${movie.error}`);
+            errors.forEach((movie, index) => {
+                console.log(`  ${index + 1}. ${movie.title} - ${movie.error}`);
             });
         }
+        
+        // Summary Statistics
+        console.log(`\n📊 CATEGORY BREAKDOWN:`);
+        console.log(`   ✅ None: ${noneRated.length} (${Math.round(noneRated.length / results.length * 100)}%)`);
+        console.log(`   ⚠️  Mild: ${mildRated.length} (${Math.round(mildRated.length / results.length * 100)}%)`);
+        console.log(`   ❌ Other: ${otherRated.length} (${Math.round(otherRated.length / results.length * 100)}%)`);
+        console.log(`   ⚠️  Errors: ${errors.length} (${Math.round(errors.length / results.length * 100)}%)`);
         
         console.log(`\n📈 Total processed: ${results.length}`);
         console.log(`🎯 Success rate: ${Math.round((results.length - errors.length) / results.length * 100)}%`);
+        console.log(`🔍 Family-friendly (None + Mild): ${noneRated.length + mildRated.length} (${Math.round((noneRated.length + mildRated.length) / results.length * 100)}%)`);
         console.log('='.repeat(80));
     }
     async checkMovie(movieName, showOutput = true) {
@@ -288,16 +388,35 @@ class IMDBParentsGuideChecker {
         if (showOutput) {
             console.log(`📋 Parents Guide URL: ${parentsGuide.parentsGuideURL}`);
             console.log(`🔞 Sex & Nudity Rating: ${parentsGuide.sexNudityRating}`);
+            
+            // Show mild reasons if applicable
+            if (parentsGuide.mildReasons && parentsGuide.mildReasons.length > 0) {
+                console.log(`📝 Mild Content Reasons:`);
+                parentsGuide.mildReasons.forEach((reason, index) => {
+                    console.log(`   ${index + 1}. ${reason}`);
+                });
+            }
         }
         
-        // Check if rating is "None"
-        const isNone = parentsGuide.sexNudityRating.toLowerCase().includes('none');
+        // Categorize rating
+        const rating = parentsGuide.sexNudityRating.toLowerCase();
+        const isNone = rating.includes('none');
+        const isMild = rating.includes('mild');
+        let category = 'Other';
+        
+        if (isNone) {
+            category = 'None';
+        } else if (isMild) {
+            category = 'Mild';
+        }
         
         if (showOutput) {
             if (isNone) {
                 console.log('✅ RESULT: Sex & Nudity is rated as "None"');
+            } else if (isMild) {
+                console.log('⚠️  RESULT: Sex & Nudity is rated as "Mild"');
             } else {
-                console.log('❌ RESULT: Sex & Nudity is NOT rated as "None"');
+                console.log('❌ RESULT: Sex & Nudity has other rating');
             }
         }
         
@@ -307,7 +426,11 @@ class IMDBParentsGuideChecker {
             imdbURL: searchResult.url,
             parentsGuideURL: parentsGuide.parentsGuideURL,
             sexNudityRating: parentsGuide.sexNudityRating,
-            isNone: isNone
+            sexNudityContent: parentsGuide.sexNudityContent,
+            mildReasons: parentsGuide.mildReasons || [],
+            category: category,
+            isNone: isNone,
+            isMild: isMild
         };
     }
 
