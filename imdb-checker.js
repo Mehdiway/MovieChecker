@@ -135,7 +135,6 @@ class IMDBParentsGuideChecker {
             // Look for Sex & Nudity section
             let sexNudityRating = null;
             let sexNudityContent = '';
-            let mildReasons = [];
             
             // Try different selectors for Sex & Nudity section
             const sections = $('.ipc-page-section');
@@ -157,18 +156,45 @@ class IMDBParentsGuideChecker {
                         }
                     }
                     
-                    // Extract content details for "Mild" analysis
-                    const contentItems = section.find('.ipc-html-content-inner-div, .advisory-content, li');
-                    contentItems.each((index, element) => {
-                        const text = $(element).text().trim();
-                        if (text && text.length > 10) { // Filter out short/empty text
-                            sexNudityContent += text + ' ';
+                    // Extract content details - get the actual IMDB content
+                    const contentItems = section.find('.ipc-html-content-inner-div li, .advisory-content li');
+                    if (contentItems.length > 0) {
+                        const contentList = [];
+                        contentItems.each((index, element) => {
+                            const text = $(element).text().trim();
+                            if (text && text.length > 5) { // Filter out very short text
+                                contentList.push(text);
+                            }
+                        });
+                        sexNudityContent = contentList.join('\n• ');
+                        if (sexNudityContent) {
+                            sexNudityContent = '• ' + sexNudityContent;
                         }
-                    });
+                    }
                     
-                    // If no content items found, get all text from section
+                    // If no list items found, try to get paragraph content
                     if (!sexNudityContent.trim()) {
-                        sexNudityContent = section.text().replace(/\s+/g, ' ').trim();
+                        const paragraphs = section.find('.ipc-html-content-inner-div p, .advisory-content p');
+                        if (paragraphs.length > 0) {
+                            const paragraphList = [];
+                            paragraphs.each((index, element) => {
+                                const text = $(element).text().trim();
+                                if (text && text.length > 5) {
+                                    paragraphList.push(text);
+                                }
+                            });
+                            sexNudityContent = paragraphList.join('\n\n');
+                        }
+                    }
+                    
+                    // Last resort: get all text content from the section (cleaned up)
+                    if (!sexNudityContent.trim()) {
+                        const allText = section.text().replace(/\s+/g, ' ').trim();
+                        // Remove the title and severity rating from the content
+                        const cleanedText = allText.replace(sectionTitle, '').replace(sexNudityRating || '', '').trim();
+                        if (cleanedText.length > 20) {
+                            sexNudityContent = cleanedText;
+                        }
                     }
                     
                     break;
@@ -185,71 +211,30 @@ class IMDBParentsGuideChecker {
                     }
                     
                     // Get content from old format
-                    const oldContent = oldFormatSection.find('.advisory-content').text().trim();
-                    if (oldContent) {
-                        sexNudityContent = oldContent;
+                    const oldContentItems = oldFormatSection.find('.advisory-content li');
+                    if (oldContentItems.length > 0) {
+                        const oldContentList = [];
+                        oldContentItems.each((index, element) => {
+                            const text = $(element).text().trim();
+                            if (text && text.length > 5) {
+                                oldContentList.push(text);
+                            }
+                        });
+                        sexNudityContent = '• ' + oldContentList.join('\n• ');
                     }
                 }
-            }
-            
-            // Analyze content for "Mild" reasons if rating is "Mild"
-            if (sexNudityRating && sexNudityRating.toLowerCase().includes('mild')) {
-                mildReasons = this.analyzeMildContent(sexNudityContent);
             }
             
             return {
                 parentsGuideURL,
                 sexNudityRating: sexNudityRating || 'Unknown',
-                sexNudityContent: sexNudityContent,
-                mildReasons: mildReasons
+                sexNudityContent: sexNudityContent.trim()
             };
             
         } catch (error) {
             console.error('Error checking parents guide:', error.message);
             return null;
         }
-    }
-
-    analyzeMildContent(content) {
-        const reasons = [];
-        const lowerContent = content.toLowerCase();
-        
-        // Common mild content indicators
-        const mildIndicators = [
-            { keyword: ['kissing', 'kiss', 'kisses'], reason: 'Contains kissing scenes' },
-            { keyword: ['brief nudity', 'briefly nude', 'brief partial nudity'], reason: 'Brief nudity shown' },
-            { keyword: ['shirtless', 'bare chest', 'topless male'], reason: 'Male characters shown shirtless' },
-            { keyword: ['cleavage', 'low cut'], reason: 'Some cleavage visible' },
-            { keyword: ['suggestive', 'innuendo', 'sexual innuendo'], reason: 'Sexual innuendo or suggestive content' },
-            { keyword: ['romantic', 'romance', 'love scene'], reason: 'Romantic scenes' },
-            { keyword: ['flirting', 'flirt'], reason: 'Flirtatious behavior' },
-            { keyword: ['revealing clothing', 'skimpy', 'tight clothing'], reason: 'Revealing or tight clothing' },
-            { keyword: ['buttocks', 'rear end', 'bottom'], reason: 'Brief glimpse of buttocks' },
-            { keyword: ['underwear', 'bra', 'panties'], reason: 'Characters shown in underwear' },
-            { keyword: ['statue', 'painting', 'artwork'], reason: 'Artistic nudity (statues/paintings)' },
-            { keyword: ['medical', 'hospital', 'doctor'], reason: 'Medical/clinical context' },
-            { keyword: ['bathing', 'shower', 'bath'], reason: 'Bathing scenes (non-explicit)' },
-            { keyword: ['dancing', 'seductive dance'], reason: 'Suggestive dancing' },
-            { keyword: ['magazine', 'poster', 'picture'], reason: 'Suggestive images/posters in background' }
-        ];
-        
-        for (const indicator of mildIndicators) {
-            for (const keyword of indicator.keyword) {
-                if (lowerContent.includes(keyword)) {
-                    if (!reasons.includes(indicator.reason)) {
-                        reasons.push(indicator.reason);
-                    }
-                    break;
-                }
-            }
-        }
-        
-        // If no specific reasons found but content exists, provide generic reason
-        if (reasons.length === 0 && content.trim()) {
-            reasons.push('Content deemed mild by IMDB reviewers');
-        }
-        
-        return reasons;
     }
 
     async checkMultipleMovies(movieList) {
@@ -316,11 +301,11 @@ class IMDBParentsGuideChecker {
             mildRated.forEach((movie, index) => {
                 console.log(`  ${index + 1}. ${movie.title} (${movie.year})`);
                 console.log(`     📋 Parents Guide: ${movie.parentsGuideURL}`);
-                if (movie.mildReasons && movie.mildReasons.length > 0) {
-                    console.log(`     📝 Mild Content Reasons:`);
-                    movie.mildReasons.forEach((reason, reasonIndex) => {
-                        console.log(`        • ${reason}`);
-                    });
+                if (movie.sexNudityContent && movie.sexNudityContent.trim()) {
+                    console.log(`     📝 IMDB Content Details:`);
+                    // Indent the content for better readability
+                    const indentedContent = movie.sexNudityContent.split('\n').map(line => `        ${line}`).join('\n');
+                    console.log(`${indentedContent}`);
                 }
                 console.log(''); // Extra spacing between mild entries
             });
@@ -389,12 +374,10 @@ class IMDBParentsGuideChecker {
             console.log(`📋 Parents Guide URL: ${parentsGuide.parentsGuideURL}`);
             console.log(`🔞 Sex & Nudity Rating: ${parentsGuide.sexNudityRating}`);
             
-            // Show mild reasons if applicable
-            if (parentsGuide.mildReasons && parentsGuide.mildReasons.length > 0) {
-                console.log(`📝 Mild Content Reasons:`);
-                parentsGuide.mildReasons.forEach((reason, index) => {
-                    console.log(`   ${index + 1}. ${reason}`);
-                });
+            // Show IMDB content for mild ratings
+            if (parentsGuide.sexNudityRating.toLowerCase().includes('mild') && parentsGuide.sexNudityContent) {
+                console.log(`📝 IMDB Content Details:`);
+                console.log(`${parentsGuide.sexNudityContent}`);
             }
         }
         
@@ -427,7 +410,6 @@ class IMDBParentsGuideChecker {
             parentsGuideURL: parentsGuide.parentsGuideURL,
             sexNudityRating: parentsGuide.sexNudityRating,
             sexNudityContent: parentsGuide.sexNudityContent,
-            mildReasons: parentsGuide.mildReasons || [],
             category: category,
             isNone: isNone,
             isMild: isMild
